@@ -539,7 +539,12 @@ deriving instance Show (Effect s)
 data Query s where
   PleaseFetchContract :: Addr -> BaseState -> (Contract -> EVM s ()) -> Query s
   PleaseFetchSlot     :: Addr -> W256 -> (W256 -> EVM s ()) -> Query s
-  PleaseAskSMT        :: Expr EWord -> [Prop] -> (BranchCondition -> EVM s ()) -> Query s
+  PleaseAskSMT        ::
+    Expr EWord                            -- Condition
+    -> [Prop]                             -- Constraints
+    -> AbstRefineConfig                   -- Configuration for abstraction-refinement
+    -> (BranchCondition -> EVM s ())      -- Continuation
+    -> Query s
   PleaseDoFFI         :: [String] -> (ByteString -> EVM s ()) -> Query s
 
 -- | Execution could proceed down one of two branches
@@ -558,9 +563,12 @@ instance Show (Query s) where
       (("<EVM.Query: fetch slot "
         ++ show slot ++ " for "
         ++ show addr ++ ">") ++)
-    PleaseAskSMT condition constraints _ ->
+    PleaseAskSMT condition constraints abstRefineConfig _ ->
       (("<EVM.Query: ask SMT about "
-        ++ show condition ++ " in context "
+        ++ show condition ++ "with configuration"
+        ++ " (arithmetic abstraction-refinement: " ++ show abstRefineConfig.arith
+        ++ " memory abstraction-refinement: " ++ show abstRefineConfig.mem
+        ++ ") in context "
         ++ show constraints ++ ">") ++)
     PleaseDoFFI cmd _ ->
       (("<EVM.Query: do ffi: " ++ (show cmd)) ++)
@@ -617,8 +625,18 @@ data RuntimeConfig = RuntimeConfig
   { allowFFI :: Bool
   , overrideCaller :: Maybe (Expr EAddr)
   , baseState :: BaseState
+  , abstRefineConfig :: AbstRefineConfig
   }
   deriving (Show)
+
+abstRefineDefault :: AbstRefineConfig
+abstRefineDefault = AbstRefineConfig False False
+
+data AbstRefineConfig = AbstRefineConfig
+  { arith :: Bool
+  , mem   :: Bool
+  }
+  deriving (Show, Eq)
 
 -- | An entry in the VM's "call/create stack"
 data Frame s = Frame
@@ -861,6 +879,7 @@ data VMOpts = VMOpts
   , create :: Bool
   , txAccessList :: Map (Expr EAddr) [W256]
   , allowFFI :: Bool
+  , abstRefineConfig :: AbstRefineConfig
   } deriving Show
 
 

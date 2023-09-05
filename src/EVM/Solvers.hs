@@ -80,11 +80,11 @@ isUnsat Unsat = True
 isUnsat _ = False
 
 checkSat :: SolverGroup -> SMT2 -> IO CheckSatResult
-checkSat (SolverGroup taskQueue) script = do
+checkSat (SolverGroup taskQueue) smt2 = do
   -- prepare result channel
   resChan <- newChan
   -- send task to solver group
-  writeChan taskQueue (Task script resChan)
+  writeChan taskQueue (Task smt2 resChan)
   -- collect result
   readChan resChan
 

@@ -455,6 +455,8 @@ vmForRuntimeCode runtimecode calldata' evmToolEnv alloc txn fromAddr toAddress =
     , create = False
     , txAccessList = mempty
     , allowFFI = False
+    , abstRefineConfig = AbstRefineConfig False False -- Concrete execution,
+                                                      -- so no need for abstraction-refinement
     }) <&> set (#env % #contracts % at (LitAddr ethrunAddress))
              (Just (initialContract (RuntimeCode (ConcreteRuntimeCode BS.empty))))
        <&> set (#state % #calldata) calldata'
@@ -574,7 +576,7 @@ interpretWithTrace fetcher =
         Stepper.Exec ->
           execWithTrace >>= interpretWithTrace fetcher . k
         Stepper.Wait q -> case q of
-          PleaseAskSMT (Lit x) _ continue ->
+          PleaseAskSMT (Lit x) _ _ continue ->
             interpretWithTrace fetcher (Stepper.evm (continue (Case (x > 0))) >>= k)
           _ -> do
             m <- liftIO (fetcher q)

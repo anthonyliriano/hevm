@@ -162,6 +162,7 @@ makeVm o = do
       { allowFFI = o.allowFFI
       , overrideCaller = Nothing
       , baseState = o.baseState
+      , abstRefineConfig = o.abstRefineConfig
       }
     }
 
@@ -532,7 +533,7 @@ exec1 = do
                       _ -> do
                         let oob = Expr.lt (bufLength vm.state.returndata) (Expr.add xFrom xSize')
                             overflow = Expr.lt (Expr.add xFrom xSize') (xFrom)
-                        branch (Expr.or oob overflow) jump
+                        branch vm.config (Expr.or oob overflow) jump
             _ -> underrun
 
         OpExtcodehash ->
@@ -732,7 +733,7 @@ exec1 = do
                       jump _    = case toInt x' of
                         Nothing -> vmError BadJumpDestination
                         Just i -> checkJump i xs
-                  in branch y jump
+                  in branch vm.config y jump
             _ -> underrun
 
         OpPc ->
@@ -786,13 +787,13 @@ exec1 = do
             xGas':xTo':xValue:xInOffset':xInSize':xOutOffset':xOutSize':xs ->
               forceConcrete5 (xGas', xInOffset', xInSize', xOutOffset', xOutSize') "CALL" $
               \(xGas, xInOffset, xInSize, xOutOffset, xOutSize) ->
-                branch (Expr.gt xValue (Lit 0)) $ \gt0 -> do
+                branch vm.config (Expr.gt xValue (Lit 0)) $ \gt0 -> do
                   (if gt0 then notStatic else id) $
                     forceAddr xTo' "unable to determine a call target" $ \xTo ->
                       case tryFrom xGas of
                         Left _ -> vmError IllegalOverflow
                         Right gas ->
-                          delegateCall this gas xTo xTo xValue xInOffset xInSize xOutOffset xOutSize xs $
+                          delegateCall vm.config this gas xTo xTo xValue xInOffset xInSize xOutOffset xOutSize xs $
                             \callee -> do
                               let from' = fromMaybe self vm.config.overrideCaller
                               zoom #state $ do
@@ -802,7 +803,7 @@ exec1 = do
                               assign (#config % #overrideCaller) Nothing
                               touchAccount from'
                               touchAccount callee
-                              transfer from' callee xValue
+                              transfer vm.config from' callee xValue
             _ ->
               underrun
 
@@ -815,7 +816,7 @@ exec1 = do
                   case tryFrom xGas of
                     Left _ -> vmError IllegalOverflow
                     Right gas ->
-                      delegateCall this gas xTo self xValue xInOffset xInSize xOutOffset xOutSize xs $ \_ -> do
+                      delegateCall vm.config this gas xTo self xValue xInOffset xInSize xOutOffset xOutSize xs $ \_ -> do
                         zoom #state $ do
                           assign #callvalue xValue
                           assign #caller $ fromMaybe self vm.config.overrideCaller
@@ -850,7 +851,7 @@ exec1 = do
                     case readByte (Lit 0) output of
                       LitByte 0xef -> frameErrored
                       LitByte _ -> frameReturned
-                      y -> branch (Expr.eqByte y (LitByte 0xef)) $ \case
+                      y -> branch vm.config (Expr.eqByte y (LitByte 0xef)) $ \case
                           True -> frameErrored
                           False -> frameReturned
                 else
@@ -871,7 +872,7 @@ exec1 = do
                     case tryFrom xGas of
                       Left _ -> vmError IllegalOverflow
                       Right gas ->
-                        delegateCall this gas xTo' self (Lit 0) xInOffset xInSize xOutOffset xOutSize xs $
+                        delegateCall vm.config this gas xTo' self (Lit 0) xInOffset xInSize xOutOffset xOutSize xs $
                           \_ -> touchAccount self
             _ -> underrun
 
@@ -907,7 +908,7 @@ exec1 = do
                     case tryFrom xGas of
                       Left _ -> vmError IllegalOverflow
                       Right gas ->
-                        delegateCall this gas xTo' xTo' (Lit 0) xInOffset xInSize xOutOffset xOutSize xs $
+                        delegateCall vm.config this gas xTo' xTo' (Lit 0) xInOffset xInSize xOutOffset xOutSize xs $
                           \callee -> do
                             zoom #state $ do
                               assign #callvalue (Lit 0)
@@ -930,7 +931,7 @@ exec1 = do
                 let cost = if acc then 0 else g_cold_account_access
                     funds = this.balance
                     recipientExists = accountExists xTo vm
-                branch (Expr.iszero $ Expr.eq funds (Lit 0)) $ \hasFunds -> do
+                branch vm.config (Expr.iszero $ Expr.eq funds (Lit 0)) $ \hasFunds -> do
                   let c_new = if (not recipientExists) && hasFunds
                               then g_selfdestruct_newaccount
                               else 0
@@ -960,9 +961,9 @@ exec1 = do
         OpUnknown xxx ->
           vmError $ UnrecognizedOpcode xxx
 
-transfer :: Expr EAddr -> Expr EAddr -> Expr EWord -> EVM s ()
-transfer _ _ (Lit 0) = pure ()
-transfer src dst val = do
+transfer :: RuntimeConfig -> Expr EAddr -> Expr EAddr -> Expr EWord -> EVM s ()
+transfer _ _ _ (Lit 0) = pure ()
+transfer config src dst val = do
   sb <- preuse $ #env % #contracts % ix src % #balance
   db <- preuse $ #env % #contracts % ix dst % #balance
   baseState <- use (#config % #baseState)
@@ -972,7 +973,7 @@ transfer src dst val = do
   case (sb, db) of
     -- both sender and recipient in state
     (Just srcBal, Just _) ->
-      branch (Expr.gt val srcBal) $ \case
+      branch config (Expr.gt val srcBal) $ \case
         True -> vmError $ BalanceTooLow val srcBal
         False -> do
           (#env % #contracts % ix src % #balance) %= (`Expr.sub` val)
@@ -982,7 +983,7 @@ transfer src dst val = do
       case src of
         LitAddr _ -> do
           (#env % #contracts) %= (Map.insert src (mkc src))
-          transfer src dst val
+          transfer config src dst val
         SymAddr _ -> do
           pc <- use (#state % #pc)
           partial $ UnexpectedSymbolicArg pc "Attempting to transfer eth from a symbolic address that is not present in the state" (wrap [src])
@@ -992,7 +993,7 @@ transfer src dst val = do
       case dst of
         LitAddr _ -> do
           (#env % #contracts) %= (Map.insert dst (mkc dst))
-          transfer src dst val
+          transfer config src dst val
         SymAddr _ -> do
           pc <- use (#state % #pc)
           partial $ UnexpectedSymbolicArg pc "Attempting to transfer eth to a symbolic address that is not present in the state" (wrap [dst])
@@ -1014,7 +1015,7 @@ callChecks this xGas xContext xTo xValue xInOffset xInSize xOutOffset xOutSize x
       let recipientExists = accountExists xContext vm
       (cost, gas') <- costOfCall fees recipientExists xValue availableGas xGas xTo
       burn (cost - gas') $
-        branch (Expr.gt xValue this.balance) $ \case
+        branch vm.config (Expr.gt xValue this.balance) $ \case
           True -> do
             assign (#state % #stack) (Lit 0 : xs)
             assign (#state % #returndata) mempty
@@ -1031,7 +1032,8 @@ callChecks this xGas xContext xTo xValue xInOffset xInSize xOutOffset xOutSize x
 
 precompiledContract
   :: (?op :: Word8)
-  => Contract
+  => RuntimeConfig
+  -> Contract
   -> Word64
   -> Addr
   -> Addr
@@ -1039,7 +1041,7 @@ precompiledContract
   -> W256 -> W256 -> W256 -> W256
   -> [Expr EWord]
   -> EVM s ()
-precompiledContract this xGas precompileAddr recipient xValue inOffset inSize outOffset outSize xs
+precompiledContract config this xGas precompileAddr recipient xValue inOffset inSize outOffset outSize xs
   = callChecks this xGas (LitAddr recipient) (LitAddr precompileAddr) xValue inOffset inSize outOffset outSize xs $ \gas' ->
     do
       executePrecompile precompileAddr gas' inOffset inSize outOffset outSize xs
@@ -1056,7 +1058,7 @@ precompiledContract this xGas precompileAddr recipient xValue inOffset inSize ou
               fetchAccount (LitAddr recipient) $ \_ -> do
                 touchAccount self
                 touchAccount (LitAddr recipient)
-                transfer self (LitAddr recipient) xValue
+                transfer config self (LitAddr recipient) xValue
             _ -> partial $
                    UnexpectedSymbolicArg pc' "unexpected return value from precompile" (wrap [x])
           _ -> underrun
@@ -1258,11 +1260,11 @@ query = assign #result . Just . HandleEffect . Query
 choose :: Choose s -> EVM s ()
 choose = assign #result . Just . HandleEffect . Choose
 
-branch :: Expr EWord -> (Bool -> EVM s ()) -> EVM s ()
-branch cond continue = do
+branch :: RuntimeConfig -> Expr EWord -> (Bool -> EVM s ()) -> EVM s ()
+branch config cond continue = do
   loc <- codeloc
   pathconds <- use #constraints
-  query $ PleaseAskSMT cond pathconds (choosePath loc)
+  query $ PleaseAskSMT cond pathconds config.abstRefineConfig (choosePath loc)
   where
     condSimp = Expr.simplify cond
     -- choosePath :: CodeLocation -> BranchCondition -> EVM s ()
@@ -1715,15 +1717,16 @@ cheatActions =
 -- note that the continuation is ignored in the precompile case
 delegateCall
   :: (?op :: Word8)
-  => Contract -> Word64 -> Expr EAddr -> Expr EAddr -> Expr EWord -> W256 -> W256 -> W256 -> W256
+  => RuntimeConfig -> Contract -> Word64 -> Expr EAddr -> Expr EAddr -> Expr EWord
+  -> W256 -> W256 -> W256 -> W256
   -> [Expr EWord]
   -> (Expr EAddr -> EVM s ())
   -> EVM s ()
-delegateCall this gasGiven xTo xContext xValue xInOffset xInSize xOutOffset xOutSize xs continue
+delegateCall config this gasGiven xTo xContext xValue xInOffset xInSize xOutOffset xOutSize xs continue
   | isPrecompileAddr xTo
       = forceConcreteAddr2 (xTo, xContext) "Cannot call precompile with symbolic addresses" $
           \(xTo', xContext') ->
-            precompiledContract this gasGiven xTo' xContext' xValue xInOffset xInSize xOutOffset xOutSize xs
+            precompiledContract config this gasGiven xTo' xContext' xValue xInOffset xInSize xOutOffset xOutSize xs
   | xTo == cheatCode = do
       assign (#state % #stack) xs
       cheat (xInOffset, xInSize) (xOutOffset, xOutSize)
@@ -1816,7 +1819,7 @@ create self this xSize xGas xValue xs newAddr initCode = do
     modifying (#env % #contracts % ix self % #nonce) (fmap ((+) 1))
     next
   -- do we have enough balance
-  else branch (Expr.gt xValue this.balance) $ \case
+  else branch vm0.config (Expr.gt xValue this.balance) $ \case
       True -> do
         assign (#state % #stack) (Lit 0 : xs)
         assign (#state % #returndata) mempty
@@ -1866,7 +1869,7 @@ create self this xSize xGas xValue xs newAddr initCode = do
             modifying (#env % #contracts % ix newAddr % #storage) resetStorage
             modifying (#env % #contracts % ix newAddr % #origStorage) resetStorage
 
-            transfer self newAddr xValue
+            transfer vm0.config self newAddr xValue
 
             pushTrace (FrameTrace newContext)
             next

@@ -14,8 +14,8 @@ import Control.Monad.ST (ST)
 ethrunAddress :: Addr
 ethrunAddress = Addr 0x00a329c0648769a73afac7f9381e08fb43dbea72
 
-vmForEthrunCreation :: ByteString -> ST s (VM s)
-vmForEthrunCreation creationCode =
+vmForEthrunCreation :: ByteString -> AbstRefineConfig -> ST s (VM s)
+vmForEthrunCreation creationCode abstRefineConfig =
   (makeVm $ VMOpts
     { contract = initialContract (InitCode creationCode mempty)
     , calldata = mempty
@@ -40,6 +40,7 @@ vmForEthrunCreation creationCode =
     , create = False
     , txAccessList = mempty
     , allowFFI = False
+    , abstRefineConfig = abstRefineConfig
     }) <&> set (#env % #contracts % at (LitAddr ethrunAddress))
              (Just (initialContract (RuntimeCode (ConcreteRuntimeCode ""))))
 

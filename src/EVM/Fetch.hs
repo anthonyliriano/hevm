@@ -203,10 +203,10 @@ oracle solvers info q = do
             AbiTuple (RegularVector.fromList [ AbiBytesDynamic . hexText . pack $ stdout'])
        _ -> internalError (show vals)
 
-    PleaseAskSMT branchcondition pathconditions continue -> do
+    PleaseAskSMT branchcondition pathconditions abstRefineConfig continue -> do
          let pathconds = foldl' PAnd (PBool True) pathconditions
          -- Is is possible to satisfy the condition?
-         continue <$> checkBranch solvers (branchcondition ./= (Lit 0)) pathconds
+         continue <$> checkBranch solvers (branchcondition ./= (Lit 0)) pathconds abstRefineConfig
 
     PleaseFetchContract addr base continue -> do
       contract <- case info of
@@ -236,15 +236,15 @@ type Fetcher s = Query s -> IO (EVM s ())
 -- When in debug mode, we do not want to be able to navigate to dead paths,
 -- but for normal execution paths with inconsistent pathconditions
 -- will be pruned anyway.
-checkBranch :: SolverGroup -> Prop -> Prop -> IO BranchCondition
-checkBranch solvers branchcondition pathconditions = do
-  checkSat solvers (assertProps False False [(branchcondition .&& pathconditions)]) >>= \case
+checkBranch :: SolverGroup -> Prop -> Prop -> AbstRefineConfig -> IO BranchCondition
+checkBranch solvers branchcondition pathconditions abstRefineConfig = do
+  checkSat solvers (assertProps abstRefineConfig [(branchcondition .&& pathconditions)]) >>= \case
     -- the condition is unsatisfiable
     Unsat -> -- if pathconditions are consistent then the condition must be false
       pure $ Case False
     -- Sat means its possible for condition to hold
     Sat _ -> -- is its negation also possible?
-      checkSat solvers (assertProps False False [(pathconditions .&& (PNeg branchcondition))]) >>= \case
+      checkSat solvers (assertProps abstRefineConfig [(pathconditions .&& (PNeg branchcondition))]) >>= \case
         -- No. The condition must hold
         Unsat -> pure $ Case True
         -- Yes. Both branches possible

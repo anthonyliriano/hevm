@@ -114,10 +114,10 @@ interpret fetcher vm = eval . view
         Exec -> do
           (r, vm') <- stToIO $ runStateT EVM.Exec.exec vm
           interpret fetcher vm' (k r)
-        Wait (PleaseAskSMT (Lit c) _ continue) -> do
+        Wait (PleaseAskSMT (Lit c) _ _ continue) -> do
           (r, vm') <- stToIO $ runStateT (continue (Case (c > 0))) vm
           interpret fetcher vm' (k r)
-        Wait (PleaseAskSMT c _ _) ->
+        Wait (PleaseAskSMT c _ _ _) ->
           error $ "cannot handle symbolic branch conditions in this interpreter: " <> show c
         Wait q -> do
           m <- fetcher q

@@ -60,22 +60,23 @@ data UnitTestOptions s = UnitTestOptions
   }
 
 data TestVMParams = TestVMParams
-  { address       :: Expr EAddr
-  , caller        :: Expr EAddr
-  , origin        :: Expr EAddr
-  , gasCreate     :: Word64
-  , gasCall       :: Word64
-  , baseFee       :: W256
-  , priorityFee   :: W256
-  , balanceCreate :: W256
-  , coinbase      :: Expr EAddr
-  , number        :: W256
-  , timestamp     :: W256
-  , gaslimit      :: Word64
-  , gasprice      :: W256
-  , maxCodeSize   :: W256
-  , prevrandao    :: W256
-  , chainId       :: W256
+  { address         :: Expr EAddr
+  , caller          :: Expr EAddr
+  , origin          :: Expr EAddr
+  , gasCreate       :: Word64
+  , gasCall         :: Word64
+  , baseFee         :: W256
+  , priorityFee     :: W256
+  , balanceCreate   :: W256
+  , coinbase        :: Expr EAddr
+  , number          :: W256
+  , timestamp       :: W256
+  , gaslimit        :: Word64
+  , gasprice        :: W256
+  , maxCodeSize     :: W256
+  , prevrandao      :: W256
+  , chainId         :: W256
+  , abstRefineConfig:: AbstRefineConfig
   }
 
 defaultGasForCreating :: Word64
@@ -467,6 +468,7 @@ initialUnitTestVm (UnitTestOptions {..}) theContract = do
            , baseState = EmptyBase
            , txAccessList = mempty -- TODO: support unit test access lists???
            , allowFFI = ffiAllowed
+           , abstRefineConfig = testParams.abstRefineConfig
            }
   let creator =
         initialContract (RuntimeCode (ConcreteRuntimeCode ""))
@@ -474,8 +476,8 @@ initialUnitTestVm (UnitTestOptions {..}) theContract = do
           & set #balance (Lit testParams.balanceCreate)
   pure $ vm & set (#env % #contracts % at (LitAddr ethrunAddress)) (Just creator)
 
-paramsFromRpc :: Fetch.RpcInfo -> IO TestVMParams
-paramsFromRpc rpcinfo = do
+paramsFromRpc :: AbstRefineConfig -> Fetch.RpcInfo -> IO TestVMParams
+paramsFromRpc abstRefineConfig rpcinfo = do
   (miner,ts,blockNum,ran,limit,base) <- case rpcinfo of
     Nothing -> pure (SymAddr "miner", Lit 0, 0, 0, 0, 0)
     Just (block, url) -> Fetch.fetchBlockFrom block url >>= \case
@@ -507,6 +509,7 @@ paramsFromRpc rpcinfo = do
     , maxCodeSize = defaultMaxCodeSize
     , prevrandao = ran
     , chainId = 99
+    , abstRefineConfig = abstRefineConfig
     }
 
 tick :: Text -> IO ()

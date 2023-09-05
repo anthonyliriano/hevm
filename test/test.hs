@@ -89,7 +89,7 @@ tests = testGroup "hevm"
         let dummyContract =
               (initialContract (RuntimeCode (ConcreteRuntimeCode mempty)))
                 { external = True }
-        vm <- stToIO $ vmForEthrunCreation ""
+        vm <- stToIO $ vmForEthrunCreation "" abstRefineDefault
             -- perform the initial access
         vm1 <- stToIO $ execStateT (EVM.accessStorage (LitAddr 0) (Lit 0) (pure . pure ())) vm
         -- it should fetch the contract first
@@ -2076,7 +2076,7 @@ tests = testGroup "hevm"
           Just c <- solcRuntime "C" code
           Just a <- solcRuntime "A" code
           (_, [Cex (_, cex)]) <- withSolvers Z3 1 Nothing $ \s -> do
-            vm <- stToIO $ abstractVM (mkCalldata (Just (Sig "call_A()" [])) []) c Nothing False
+            vm <- stToIO $ abstractVM (mkCalldata (Just (Sig "call_A()" [])) []) c Nothing False abstRefineDefault
                     <&> set (#state % #callvalue) (Lit 0)
                     <&> over (#env % #contracts)
                        (Map.insert aAddr (initialContract (RuntimeCode (ConcreteRuntimeCode a))))
@@ -2140,7 +2140,7 @@ tests = testGroup "hevm"
         ,
         testCase "safemath-distributivity-yul" $ do
           let yulsafeDistributivity = hex "6355a79a6260003560e01c14156016576015601f565b5b60006000fd60a1565b603d602d604435600435607c565b6039602435600435607c565b605d565b6052604b604435602435605d565b600435607c565b141515605a57fe5b5b565b6000828201821115151560705760006000fd5b82820190505b92915050565b6000818384048302146000841417151560955760006000fd5b82820290505b92915050565b"
-          vm <- stToIO $ abstractVM (mkCalldata (Just (Sig "distributivity(uint256,uint256,uint256)" [AbiUIntType 256, AbiUIntType 256, AbiUIntType 256])) []) yulsafeDistributivity Nothing False
+          vm <- stToIO $ abstractVM (mkCalldata (Just (Sig "distributivity(uint256,uint256,uint256)" [AbiUIntType 256, AbiUIntType 256, AbiUIntType 256])) []) yulsafeDistributivity Nothing False abstRefineDefault
           (_, [Qed _]) <-  withSolvers Z3 1 Nothing $ \s -> verify s defaultVeriOpts vm (Just $ checkAssertions defaultPanicCodes)
           putStrLn "Proven"
         ,
@@ -2727,7 +2727,7 @@ checkEquivBase mkprop l r = withSolvers Z3 1 (Just 1) $ \solvers -> do
        putStrLn "skip"
        pure True
      else do
-       let smt = assertProps False False [mkprop l r]
+       let smt = assertProps abstRefineDefault [mkprop l r]
        res <- checkSat solvers smt
        print res
        pure $ case res of
@@ -2754,7 +2754,7 @@ runSimpleVM x ins = do
 -- | Takes a creation code and returns a vm with the result of executing the creation code
 loadVM :: ByteString -> IO (Maybe (VM RealWorld))
 loadVM x = do
-  vm <- stToIO $ vmForEthrunCreation x
+  vm <- stToIO $ vmForEthrunCreation x abstRefineDefault
   vm1 <- Stepper.interpret (Fetch.zero 0 Nothing) vm Stepper.runFully
   case vm1.result of
      Just (VMSuccess (ConcreteBuf targetCode)) -> do

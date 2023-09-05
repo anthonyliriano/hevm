@@ -216,8 +216,7 @@ equivalence cmd = do
                           , maxIter = cmd.maxIterations
                           , askSmtIters = cmd.askSmtIterations
                           , loopHeuristic = cmd.loopDetectionHeuristic
-                          , abstRefineArith = cmd.abstractArithmetic
-                          , abstRefineMem = cmd.abstractMemory
+                          , abstRefineConfig = AbstRefineConfig cmd.abstractArithmetic cmd.abstractMemory
                           , rpcInfo = Nothing
                           }
   calldata <- buildCalldata cmd
@@ -297,15 +296,13 @@ assert cmd = do
   let solverCount = fromMaybe cores cmd.numSolvers
   solver <- getSolver cmd
   withSolvers solver solverCount cmd.smttimeout $ \solvers -> do
-    let opts = VeriOpts {
-      simp = True,
-      debug = cmd.smtdebug,
-      maxIter = cmd.maxIterations,
-      askSmtIters = cmd.askSmtIterations,
-      loopHeuristic = cmd.loopDetectionHeuristic,
-      abstRefineArith = cmd.abstractArithmetic,
-      abstRefineMem = cmd.abstractMemory,
-      rpcInfo = rpcinfo
+    let opts = VeriOpts { simp = True
+                        , debug = cmd.smtdebug
+                        , maxIter = cmd.maxIterations
+                        , askSmtIters = cmd.askSmtIterations
+                        , loopHeuristic = cmd.loopDetectionHeuristic
+                        , abstRefineConfig = AbstRefineConfig cmd.abstractArithmetic cmd.abstractMemory
+                        , rpcInfo = rpcinfo
     }
     (expr, res) <- verify solvers opts preState (Just $ checkAssertions errCodes)
     case res of
@@ -450,29 +447,30 @@ vmFromCommand cmd = do
                   else addr (.address) (LitAddr 0xacab)
 
         vm0 baseFee miner ts blockNum prevRan c = makeVm $ VMOpts
-          { contract      = c
-          , calldata      = (calldata, [])
-          , value         = Lit value
-          , address       = address
-          , caller        = caller
-          , origin        = origin
-          , gas           = word64 (.gas) 0xffffffffffffffff
-          , baseFee       = baseFee
-          , priorityFee   = word (.priorityFee) 0
-          , gaslimit      = word64 (.gaslimit) 0xffffffffffffffff
-          , coinbase      = addr (.coinbase) miner
-          , number        = word (.number) blockNum
-          , timestamp     = Lit $ word (.timestamp) ts
-          , blockGaslimit = word64 (.gaslimit) 0xffffffffffffffff
-          , gasprice      = word (.gasprice) 0
-          , maxCodeSize   = word (.maxcodesize) 0xffffffff
-          , prevRandao    = word (.prevRandao) prevRan
-          , schedule      = feeSchedule
-          , chainId       = word (.chainid) 1
-          , create        = (.create) cmd
-          , baseState     = EmptyBase
-          , txAccessList  = mempty -- TODO: support me soon
-          , allowFFI      = False
+          { contract        = c
+          , calldata        = (calldata, [])
+          , value           = Lit value
+          , address         = address
+          , caller          = caller
+          , origin          = origin
+          , gas             = word64 (.gas) 0xffffffffffffffff
+          , baseFee         = baseFee
+          , priorityFee     = word (.priorityFee) 0
+          , gaslimit        = word64 (.gaslimit) 0xffffffffffffffff
+          , coinbase        = addr (.coinbase) miner
+          , number          = word (.number) blockNum
+          , timestamp       = Lit $ word (.timestamp) ts
+          , blockGaslimit   = word64 (.gaslimit) 0xffffffffffffffff
+          , gasprice        = word (.gasprice) 0
+          , maxCodeSize     = word (.maxcodesize) 0xffffffff
+          , prevRandao      = word (.prevRandao) prevRan
+          , schedule        = feeSchedule
+          , chainId         = word (.chainid) 1
+          , create          = (.create) cmd
+          , baseState       = EmptyBase
+          , txAccessList    = mempty -- TODO: support me soon
+          , allowFFI        = False
+          , abstRefineConfig = AbstRefineConfig cmd.abstractArithmetic cmd.abstractMemory
           }
         word f def = fromMaybe def (f cmd)
         word64 f def = fromMaybe def (f cmd)
@@ -553,6 +551,7 @@ symvmFromCommand cmd calldata = do
       , baseState     = maybe AbstractBase parseInitialStorage (cmd.initialStorage)
       , txAccessList  = mempty
       , allowFFI      = False
+      , abstRefineConfig = AbstRefineConfig cmd.abstractArithmetic cmd.abstractMemory
       }
     word f def = fromMaybe def (f cmd)
     word64 f def = fromMaybe def (f cmd)
@@ -567,7 +566,7 @@ unitTestOptions cmd solvers buildOutput = do
           (Just block, Just url) -> Just (Fetch.BlockNumber block, url)
           (Nothing, Just url) -> Just (Fetch.Latest, url)
           _ -> Nothing
-  params <- paramsFromRpc rpcinfo
+  params <- paramsFromRpc (AbstRefineConfig cmd.abstractArithmetic, cmd.abstractMemory) rpcinfo
 
   let
     testn = params.number

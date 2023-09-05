@@ -77,8 +77,7 @@ data VeriOpts = VeriOpts
   , maxIter :: Maybe Integer
   , askSmtIters :: Integer
   , loopHeuristic :: LoopHeuristic
-  , abstRefineArith :: Bool
-  , abstRefineMem :: Bool
+  , abstRefineConfig ::AbstRefineConfig
   , rpcInfo :: Fetch.RpcInfo
   }
   deriving (Eq, Show)
@@ -90,8 +89,7 @@ defaultVeriOpts = VeriOpts
   , maxIter = Nothing
   , askSmtIters = 1
   , loopHeuristic = StackBased
-  , abstRefineArith = False
-  , abstRefineMem = False
+  , abstRefineConfig = abstRefineDefault
   , rpcInfo = Nothing
   }
 
@@ -102,7 +100,7 @@ debugVeriOpts :: VeriOpts
 debugVeriOpts = defaultVeriOpts { debug = True }
 
 debugAbstVeriOpts :: VeriOpts
-debugAbstVeriOpts = defaultVeriOpts { abstRefineMem = True, abstRefineArith = True }
+debugAbstVeriOpts = defaultVeriOpts { abstRefineConfig = AbstRefineConfig True True }
 
 extractCex :: VerifyResult -> Maybe (Expr End, SMTCex)
 extractCex (Cex c) = Just c
@@ -196,11 +194,12 @@ abstractVM
   -> ByteString
   -> Maybe (Precondition s)
   -> Bool
+  -> AbstRefineConfig
   -> ST s (VM s)
-abstractVM cd contractCode maybepre create = do
+abstractVM cd contractCode maybepre create abstRefineConfig = do
   let value = TxValue
   let code = if create then InitCode contractCode mempty else RuntimeCode (ConcreteRuntimeCode contractCode)
-  vm <- loadSymVM code value (if create then mempty else cd) create
+  vm <- loadSymVM code value (if create then mempty else cd) create abstRefineConfig
   let precond = case maybepre of
                 Nothing -> []
                 Just p -> [p vm]
@@ -211,10 +210,11 @@ loadSymVM
   -> Expr EWord
   -> (Expr Buf, [Prop])
   -> Bool
+  -> AbstRefineConfig
   -> ST s (VM s)
-loadSymVM x callvalue cd create =
+loadSymVM contractCode callvalue cd create abstRefineConfig =
   (makeVm $ VMOpts
-    { contract = abstractContract x (SymAddr "entrypoint")
+    { contract = abstractContract contractCode (SymAddr "entrypoint")
     , calldata = cd
     , value = callvalue
     , baseState = AbstractBase
@@ -237,6 +237,7 @@ loadSymVM x callvalue cd create =
     , create = create
     , txAccessList = mempty
     , allowFFI = False
+    , abstRefineConfig = abstRefineConfig
     })
 
 -- | Interpreter which explores all paths at branching points. Returns an
@@ -284,7 +285,8 @@ interpret fetcher maxIter askSmtIters heuristic vm =
               interpret fetcher maxIter askSmtIters heuristic vm' (k r)
 
         case q of
-          PleaseAskSMT cond _ continue -> do
+          -- TODO use abstraction
+          PleaseAskSMT cond _ _ continue -> do
             case cond of
               -- is the condition concrete?
               Lit c ->
@@ -432,7 +434,7 @@ verifyContract
   -> Maybe (Postcondition RealWorld)
   -> IO (Expr End, [VerifyResult])
 verifyContract solvers theCode signature' concreteArgs opts maybepre maybepost = do
-  preState <- stToIO $ abstractVM (mkCalldata signature' concreteArgs) theCode maybepre False
+  preState <- stToIO $ abstractVM (mkCalldata signature' concreteArgs) theCode maybepre False opts.abstRefineConfig
   verify solvers opts preState maybepost
 
 -- | Stepper that parses the result of Stepper.runFully into an Expr End
@@ -472,8 +474,8 @@ flattenExpr = go []
 -- the incremental nature of the task at hand. Introducing support for
 -- incremental queries might let us go even faster here.
 -- TODO: handle errors properly
-reachable :: SolverGroup -> Expr End -> IO ([SMT2], Expr End)
-reachable solvers e = do
+reachable :: SolverGroup -> Expr End -> AbstRefineConfig -> IO ([SMT2], Expr End)
+reachable solvers e abstRefineConfig = do
   res <- go [] e
   pure $ second (fromMaybe (internalError "no reachable paths found")) res
   where
@@ -496,7 +498,7 @@ reachable solvers e = do
               (Nothing, Nothing) -> Nothing
         pure (fst tres <> fst fres, subexpr)
       leaf -> do
-        let query = assertProps False False pcs
+        let query = assertProps abstRefineConfig pcs
         res <- checkSat solvers query
         case res of
           Sat _ -> pure ([query], Just leaf)
@@ -562,7 +564,7 @@ verify solvers opts preState maybepost = do
             _ -> True
         assumes = preState.constraints
         withQueries = canViolate <&> \leaf ->
-          (assertProps opts.abstRefineArith opts.abstRefineMem (PNeg (post preState leaf) : assumes <> extractProps leaf), leaf)
+          (assertProps opts.abstRefineConfig (PNeg (post preState leaf) : assumes <> extractProps leaf), leaf)
       putStrLn $ "Checking for reachability of "
                    <> show (length withQueries)
                    <> " potential property violation(s)"
@@ -623,7 +625,7 @@ equivalenceCheck solvers bytecodeA bytecodeB opts calldata = do
     getBranches :: ByteString -> IO [Expr End]
     getBranches bs = do
       let bytecode = if BS.null bs then BS.pack [0] else bs
-      prestate <- stToIO $ abstractVM calldata bytecode Nothing False
+      prestate <- stToIO $ abstractVM calldata bytecode Nothing False opts.abstRefineConfig
       expr <- interpret (Fetch.oracle solvers Nothing) opts.maxIter opts.askSmtIters opts.loopHeuristic prestate runExpr
       let simpl = if opts.simp then (Expr.simplify expr) else expr
       pure $ flattenExpr simpl
@@ -674,7 +676,7 @@ equivalenceCheck' solvers branchesA branchesB opts = do
     -- used or not
     check :: UnsatCache -> (Set Prop) -> Int -> IO (EquivResult, Bool)
     check knownUnsat props idx = do
-      let smt = assertProps opts.abstRefineArith opts.abstRefineMem (Set.toList props)
+      let smt = assertProps opts.abstRefineConfig (Set.toList props)
       -- if debug is on, write the query to a file
       let filename = "equiv-query-" <> show idx <> ".smt2"
       when opts.debug $ TL.writeFile filename (formatSMT2 smt <> "\n\n(check-sat)")
@@ -770,10 +772,10 @@ equivalenceCheck' solvers branchesA branchesB opts = do
 both' :: (a -> b) -> (a, a) -> (b, b)
 both' f (x, y) = (f x, f y)
 
-produceModels :: SolverGroup -> Expr End -> IO [(Expr End, CheckSatResult)]
-produceModels solvers expr = do
+produceModels :: AbstRefineConfig -> SolverGroup -> Expr End -> IO [(Expr End, CheckSatResult)]
+produceModels abstRefineConfig solvers expr = do
   let flattened = flattenExpr expr
-      withQueries = fmap (\e -> ((assertProps False False) . extractProps $ e, e)) flattened
+      withQueries = fmap (\e -> ((assertProps abstRefineConfig) . extractProps $ e, e)) flattened
   results <- flip mapConcurrently withQueries $ \(query, leaf) -> do
     res <- checkSat solvers query
     pure (res, leaf)
