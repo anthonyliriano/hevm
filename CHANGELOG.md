@@ -72,6 +72,7 @@ This release also includes many small bugfixes:
 - we now generate correct counterexamples for branches where only a subset of input variables are referenced by the path conditions
 - `vm.prank` now works correctly when passed a symbolic address
 - storage layout information will now be parsed from the output of `forge build` if it is available
+- Added concrete fuzzer that can be controlled via `--num-cex-fuzz`
 
 ## API Changes
 

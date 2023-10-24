@@ -2640,6 +2640,35 @@ tests = testGroup "hevm"
           assertBoolM "Did not find expected storage cex" testCex
           putStrLnM "Expected counterexample found"
   ]
+  , testGroup "concr-fuzz"
+    [ test "fuzz-complicated-mul" $ do
+      Just c <- solcRuntime "MyContract"
+        [i|
+        contract MyContract {
+          function complicated(uint x, uint y, uint z) public {
+            uint a;
+            uint b;
+            unchecked {
+              a = x * x * x * y * y * y * z;
+              b = x * x * x * x * y * y * z * z;
+            }
+            assert(a == b);
+          }
+        }
+        |]
+      let sig = (Sig "complicated(uint256,uint256,uint256)" [AbiUIntType 256, AbiUIntType 256, AbiUIntType 256])
+      (_, [Cex (_, ctr)]) <- withSolvers CVC5 1 Nothing $ \s -> checkAssert s defaultPanicCodes c (Just sig) [] defaultVeriOpts
+      let
+        x = getVar ctr "arg1"
+        y = getVar ctr "arg2"
+        z = getVar ctr "arg3"
+        a = x * x * x * y * y * y * z;
+        b = x * x * x * x * y * y * z * z;
+        val = a == b
+      assertBoolM "Must fail" (not val)
+      putStrLnM  $ "expected counterexample found, x:  " <> (show x) <> " y: " <> (show y) <> " z: " <> (show z)
+      putStrLnM  $ "cex a: " <> (show a) <> " b: " <> (show b)
+  ]
   , testGroup "simplification-working"
   [
     test "prop-simp-bool1" $ do

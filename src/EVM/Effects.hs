@@ -50,6 +50,7 @@ data Config = Config
   , abstRefineArith :: Bool
   , abstRefineMem   :: Bool
   , dumpTrace       :: Bool
+  , numCexFuzz      :: Integer
   }
   deriving (Show, Eq)
 
@@ -62,6 +63,7 @@ defaultConfig = Config
   , abstRefineArith = False
   , abstRefineMem   = False
   , dumpTrace = False
+  , numCexFuzz = 3
   }
 
 writeTraceDapp :: App m => DappInfo -> VM RealWorld -> m ()
