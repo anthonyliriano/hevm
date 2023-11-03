@@ -26,6 +26,7 @@ tryCexFuzz ps tries = CMR.evalRand (testVals tries) (CMR.mkStdGen 1337)
   where
     vars = extractVars ps
     bufs = extractBufs ps
+    stores = extractStores ps
     testVals :: CMR.MonadRandom m => Integer -> m (Maybe SMTCex)
     testVals 0 = pure Nothing
     testVals todo = do
@@ -102,7 +103,6 @@ extractBufs ps = Set.toList bufs
  where
   CollectBufs bufs = execState (mapM_ findBufProp ps) initBufsState
 
-
 findBufProp :: Prop -> State CollectBufs Prop
 findBufProp p = mapPropM go p
   where
@@ -111,6 +111,29 @@ findBufProp p = mapPropM go p
       e@(AbstractBuf a) -> do
         s <- get
         put $ s{bufs=Set.insert (AbstractBuf a) s.bufs}
+        pure e
+      e -> pure e
+
+--- Store extraction
+newtype CollectStores = CollectStores { stores :: Set.Set (Expr Storage) }
+  deriving (Show)
+
+initStoresState :: CollectStores
+initStoresState = CollectStores { stores = Set.empty }
+
+extractStores :: [Prop] -> [Expr Storage]
+extractStores ps = Set.toList bufs
+ where
+  CollectStores bufs = execState (mapM_ findStoreProp ps) initStoresState
+
+findStoreProp :: Prop -> State CollectStores Prop
+findStoreProp p = mapPropM go p
+  where
+    go :: forall a. Expr a -> State CollectStores (Expr a)
+    go = \case
+      e@(AbstractStore a) -> do
+        s <- get
+        put $ s{bufs=Set.insert (AbstractStore a) s.stores}
         pure e
       e -> pure e
 
@@ -142,7 +165,6 @@ getBufs bufs = go bufs mempty
                            else getRndW8
       bytes <- getRndW8s (fromIntegral size)
       go ax (Map.insert a (Flat $ BS.pack bytes) valMap)
-
 
 getRndW8 :: CMR.MonadRandom m => m Word8
 getRndW8 = do CMR.getRandom
