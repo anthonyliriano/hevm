@@ -199,7 +199,7 @@ main = do
   cmd <- Options.unwrapRecord "hevm -- Ethereum evaluator"
   let env = Env { config = defaultConfig
     { dumpQueries = cmd.smtdebug
-    , verbose = fromMaybe 0 cmd.verbose
+    , debug = cmd.debug
     , numCexFuzz = cmd.numCexFuzz
     , abstRefineMem = cmd.abstractMemory
     , abstRefineArith = cmd.abstractArithmetic
