@@ -23,6 +23,7 @@ import EVM.Types (Prop(..), W256, Expr(..), EType(..), internalError)
 import EVM.SMT (BufModel(..), SMTCex(..))
 import Debug.Trace
 
+-- TODO: Extract Var X = Lit Z, and set it
 tryCexFuzz :: [Prop] -> Integer -> Maybe (SMTCex)
 tryCexFuzz ps tries = CMR.evalRand (testVals tries) (CMR.mkStdGen 1337)
   where
@@ -35,10 +36,12 @@ tryCexFuzz ps tries = CMR.evalRand (testVals tries) (CMR.mkStdGen 1337)
       varVals <- getVals vars
       bufVals <- getBufs bufs
       storeVals <- getStores stores
-      traceM $ "storeVals: " <> show storeVals
+      -- traceM $ "storeVals: " <> show storeVals
+      -- traceM $ "mapped: " <> (show $ map (substituteStores storeVals) ps)
       let
         ret =  map (substituteEWord varVals . substituteBuf bufVals . substituteStores storeVals) ps
         retSimp =  Expr.simplifyProps ret
+      -- traceM $ "ret: " <> show ret
       if null retSimp then pure $ Just (SMTCex {
                                     vars = varVals
                                     , addrs = mempty
@@ -79,6 +82,7 @@ substituteStores valMap p = mapProp go p
     go a = a
 
 -- Var extraction
+-- TODO extract all Lit's and stick them into the values once in a while
 newtype CollectVars = CollectVars { vs :: Set.Set (Expr EWord) }
   deriving (Show)
 
@@ -129,6 +133,7 @@ findBufProp p = mapPropM go p
 --- Store extraction
 data CollectStorage = CollectStorage { stores :: Set.Set (Expr EAddr)
                                      , loads :: Set.Set W256
+                                     -- TODO values
                                      }
   deriving (Show)
 
