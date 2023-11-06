@@ -9,7 +9,8 @@ module EVM.Fuzz where
 
 import Prelude hiding (LT, GT, lookup)
 import Control.Monad.State
-import Data.Map.Strict as Map (Map, (!), (!?), insert)
+import Data.Maybe (fromMaybe)
+import Data.Map.Strict as Map (fromList, Map, (!), (!?), insert)
 import EVM.Expr qualified as Expr
 import EVM.Expr (bytesToW256)
 import Data.Set as Set (insert, Set, empty, toList)
@@ -20,26 +21,29 @@ import Control.Monad.Random.Strict qualified as CMR
 
 import EVM.Types (Prop(..), W256, Expr(..), EType(..), internalError)
 import EVM.SMT (BufModel(..), SMTCex(..))
+import Debug.Trace
 
 tryCexFuzz :: [Prop] -> Integer -> Maybe (SMTCex)
 tryCexFuzz ps tries = CMR.evalRand (testVals tries) (CMR.mkStdGen 1337)
   where
     vars = extractVars ps
     bufs = extractBufs ps
-    stores = extractStores ps
+    stores = extractStorage ps
     testVals :: CMR.MonadRandom m => Integer -> m (Maybe SMTCex)
     testVals 0 = pure Nothing
     testVals todo = do
       varVals <- getVals vars
       bufVals <- getBufs bufs
+      storeVals <- getStores stores
+      traceM $ "storeVals: " <> show storeVals
       let
-        ret =  map (substituteEWord varVals . substituteBuf bufVals) ps
+        ret =  map (substituteEWord varVals . substituteBuf bufVals . substituteStores storeVals) ps
         retSimp =  Expr.simplifyProps ret
       if null retSimp then pure $ Just (SMTCex {
                                     vars = varVals
                                     , addrs = mempty
                                     , buffers = bufVals
-                                    , store = mempty
+                                    , store = storeVals
                                     , blockContext = mempty
                                     , txContext = mempty
                                     })
@@ -65,6 +69,14 @@ substituteBuf valMap p = mapProp go p
                                 Nothing -> orig
     go a = a
 
+substituteStores ::  Map (Expr 'EAddr) (Map W256 W256) -> Prop -> Prop
+substituteStores valMap p = mapProp go p
+  where
+    go :: Expr a -> Expr a
+    go (AbstractStore a) = case valMap !? a of
+                                  Just m -> ConcreteStore m
+                                  Nothing -> ConcreteStore mempty
+    go a = a
 
 -- Var extraction
 newtype CollectVars = CollectVars { vs :: Set.Set (Expr EWord) }
@@ -115,28 +127,31 @@ findBufProp p = mapPropM go p
       e -> pure e
 
 --- Store extraction
-newtype CollectStores = CollectStores { stores :: Set.Set (Expr Storage) }
+data CollectStorage = CollectStorage { stores :: Set.Set (Expr EAddr)
+                                     , loads :: Set.Set W256
+                                     }
   deriving (Show)
 
-initStoresState :: CollectStores
-initStoresState = CollectStores { stores = Set.empty }
+initStorageState :: CollectStorage
+initStorageState = CollectStorage { stores = Set.empty, loads = Set.empty }
 
-extractStores :: [Prop] -> [Expr Storage]
-extractStores ps = Set.toList bufs
- where
-  CollectStores bufs = execState (mapM_ findStoreProp ps) initStoresState
+extractStorage :: [Prop] -> CollectStorage
+extractStorage ps = execState (mapM_ findStorageProp ps) initStorageState
 
-findStoreProp :: Prop -> State CollectStores Prop
-findStoreProp p = mapPropM go p
+findStorageProp :: Prop -> State CollectStorage Prop
+findStorageProp p = mapPropM go p
   where
-    go :: forall a. Expr a -> State CollectStores (Expr a)
+    go :: forall a. Expr a -> State CollectStorage (Expr a)
     go = \case
       e@(AbstractStore a) -> do
         s <- get
-        put $ s{bufs=Set.insert (AbstractStore a) s.stores}
+        put $ s{stores=Set.insert a s.stores}
+        pure e
+      e@(SLoad (Lit val) _) -> do
+        s <- get
+        put $ s{loads=Set.insert val s.loads}
         pure e
       e -> pure e
-
 
 -- Var value generation
 getVals :: CMR.MonadRandom m => [Expr EWord] -> m (Map (Expr EWord) W256)
@@ -149,9 +164,29 @@ getVals vars = do
     go :: CMR.MonadRandom m => [Expr EWord] -> Map (Expr EWord) W256 -> m (Map (Expr EWord) W256)
     go [] valMap = pure valMap
     go (a:ax) valMap = do
-      val <- getRndW8s 32
-      go ax (Map.insert a (bytesToW256 val) valMap)
+      val <- getRndW256
+      go ax (Map.insert a val valMap)
 
+-- Storage value generation
+getStores :: CMR.MonadRandom m => CollectStorage -> m (Map (Expr EAddr) (Map W256 W256))
+getStores storesLoads = go (Set.toList storesLoads.stores) mempty
+  where
+    go :: CMR.MonadRandom m => [Expr EAddr] -> Map (Expr EAddr) (Map W256 W256) -> m (Map (Expr EAddr) (Map W256 W256))
+    go [] addrToValsMap = pure addrToValsMap
+    -- TODO: add more than one write to a single address
+    go (addr:ax) addrToValsMap = do
+      emptySize :: Bool <- CMR.getRandom
+      valMap <- if emptySize then pure $ Map.fromList [(0 :: W256,0::W256)]
+                             else do
+                               a <- getRndElem storesLoads.loads
+                               b <- getRndW256
+                               pure $ Map.fromList [(fromMaybe (0::W256) a, b)]
+      go ax (Map.insert addr valMap addrToValsMap)
+    getRndElem :: CMR.MonadRandom m => Set W256 -> m (Maybe W256)
+    getRndElem choices = if null choices then pure Nothing
+                         else do
+                           k <- CMR.getRandomR (0, length choices-1)
+                           pure $ Just (Set.toList choices !! k)
 
 -- Buf value generation
 getBufs :: CMR.MonadRandom m => [Expr Buf] -> m (Map (Expr Buf) BufModel)
@@ -168,6 +203,11 @@ getBufs bufs = go bufs mempty
 
 getRndW8 :: CMR.MonadRandom m => m Word8
 getRndW8 = do CMR.getRandom
+
+getRndW256 :: CMR.MonadRandom m => m W256
+getRndW256 = do
+      val <- getRndW8s 32
+      pure $ bytesToW256 val
 
 getRndW8s :: CMR.MonadRandom m => Int -> m [Word8]
 getRndW8s n = replicateM n getRndW8

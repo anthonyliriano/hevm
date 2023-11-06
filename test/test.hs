@@ -2668,6 +2668,19 @@ tests = testGroup "hevm"
       assertBoolM "Must fail" (not val)
       putStrLnM  $ "expected counterexample found, x:  " <> (show x) <> " y: " <> (show y) <> " z: " <> (show z)
       putStrLnM  $ "cex a: " <> (show a) <> " b: " <> (show b)
+    , test "fuzz-stores" $ do
+      Just c <- solcRuntime "MyContract"
+        [i|
+        contract MyContract {
+          mapping(uint => uint) items;
+          function func(uint x) public {
+            assert(items[5] == 0);
+          }
+        }
+        |]
+      let sig = (Sig "func(uint256)" [AbiUIntType 256])
+      (_, [Cex (_, ctr)]) <- withSolvers CVC5 1 Nothing $ \s -> checkAssert s defaultPanicCodes c (Just sig) [] defaultVeriOpts
+      putStrLnM  $ "expected counterexample found.  ctr: " <> (show ctr)
   ]
   , testGroup "simplification-working"
   [
