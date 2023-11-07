@@ -2681,6 +2681,31 @@ tests = testGroup "hevm"
       let sig = (Sig "func()" [])
       (_, [Cex (_, ctr)]) <- withSolvers CVC5 1 Nothing $ \s -> checkAssert s defaultPanicCodes c (Just sig) [] defaultVeriOpts
       putStrLnM  $ "expected counterexample found.  ctr: " <> (show ctr)
+    , test "fuzz-simple-fixed-value" $ do
+      Just c <- solcRuntime "MyContract"
+        [i|
+        contract MyContract {
+          mapping(uint => uint) items;
+          function func(uint a) public {
+            assert(a != 1337);
+          }
+        }
+        |]
+      let sig = (Sig "func(uint256)" [AbiUIntType 256])
+      (_, [Cex (_, ctr)]) <- withSolvers CVC5 1 Nothing $ \s -> checkAssert s defaultPanicCodes c (Just sig) [] defaultVeriOpts
+      putStrLnM  $ "expected counterexample found.  ctr: " <> (show ctr)
+    , test "fuzz-simple-fixed-value2" $ do
+      Just c <- solcRuntime "MyContract"
+        [i|
+        contract MyContract {
+          function func(uint a, uint b) public {
+            assert((a != 1337) && (b != 99));
+          }
+        }
+        |]
+      let sig = (Sig "func(uint256,uint256)" [AbiUIntType 256, AbiUIntType 256])
+      (_, [Cex (_, ctr)]) <- withSolvers CVC5 1 Nothing $ \s -> checkAssert s defaultPanicCodes c (Just sig) [] defaultVeriOpts
+      putStrLnM  $ "expected counterexample found.  ctr: " <> (show ctr)
   ]
   , testGroup "simplification-working"
   [

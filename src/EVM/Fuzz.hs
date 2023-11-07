@@ -87,11 +87,15 @@ substituteStores valMap p = mapProp go p
 
 -- Var extraction
 -- TODO extract all Lit's and stick them into the values once in a while
-newtype CollectVars = CollectVars { vs :: Set.Set (Expr EWord) }
+data CollectVars = CollectVars {vars :: Set.Set (Expr EWord)
+                               ,vals :: Set.Set W256
+                               }
   deriving (Show)
 
 initVarsState :: CollectVars
-initVarsState = CollectVars { vs = Set.empty }
+initVarsState = CollectVars {vars = Set.empty
+                            ,vals =  Set.empty
+                            }
 
 findVarProp :: Prop -> State CollectVars Prop
 findVarProp p = mapPropM go p
@@ -99,16 +103,19 @@ findVarProp p = mapPropM go p
     go :: forall a. Expr a -> State CollectVars (Expr a)
     go = \case
       e@(Var a) -> do
-        s <- get
-        put $ s{vs=Set.insert (Var a) s.vs}
+        s :: CollectVars <- get
+        put CollectVars {vars=Set.insert (Var a) s.vars, vals = s.vals}
+        pure e
+      e@(Lit a) -> do
+        s :: CollectVars <- get
+        put $ s{vals=Set.insert a s.vals}
         pure e
       e -> pure e
 
 
-extractVars :: [Prop] -> [Expr EWord]
-extractVars ps = Set.toList vars
- where
-  CollectVars vars = execState (mapM_ findVarProp ps) initVarsState
+extractVars :: [Prop] -> CollectVars
+extractVars ps = execState (mapM_ findVarProp ps) initVarsState
+
 
 
 --- Buf extraction
@@ -163,9 +170,9 @@ findStorageProp p = mapPropM go p
       e -> pure e
 
 -- Var value generation
-getVals :: CMR.MonadRandom m => [Expr EWord] -> m (Map (Expr EWord) W256)
+getVals :: CMR.MonadRandom m => CollectVars -> m (Map (Expr EWord) W256)
 getVals vars = do
-    bufs <- go vars mempty
+    bufs <- go (Set.toList vars.vars) mempty
     addTxStuff bufs
   where
     addTxStuff :: CMR.MonadRandom m => Map (Expr EWord) W256 -> m (Map (Expr EWord) W256)
@@ -173,7 +180,10 @@ getVals vars = do
     go :: CMR.MonadRandom m => [Expr EWord] -> Map (Expr EWord) W256 -> m (Map (Expr EWord) W256)
     go [] valMap = pure valMap
     go (a:ax) valMap = do
-      val <- getRndW256
+      pickKnown :: Bool <- CMR.getRandom
+      let choices :: [W256] = Set.toList (vars.vals)
+      val <- if (not pickKnown) || (null vars.vals) then do getRndW256
+                                                    else do pickOne choices
       go ax (Map.insert a val valMap)
 
 -- Storage value generation
@@ -193,9 +203,13 @@ getStores storesLoads = go (Set.toList storesLoads.stores) mempty
       go ax (Map.insert addr valMap addrToValsMap)
     getRndElem :: CMR.MonadRandom m => Set W256 -> m (Maybe W256)
     getRndElem choices = if null choices then pure Nothing
-                         else do
-                           k <- CMR.getRandomR (0, length choices-1)
-                           pure $ Just (Set.toList choices !! k)
+                         else do fmap Just $ pickOne $ Set.toList choices
+
+-- Picks one element from list. List must be non-empty
+pickOne :: CMR.MonadRandom m => [k] -> m k
+pickOne s = do
+  k <- CMR.getRandomR (0, (length s)-1)
+  pure $ s !! k
 
 -- Buf value generation
 getBufs :: CMR.MonadRandom m => [Expr Buf] -> m (Map (Expr Buf) BufModel)
