@@ -2673,12 +2673,12 @@ tests = testGroup "hevm"
         [i|
         contract MyContract {
           mapping(uint => uint) items;
-          function func(uint x) public {
+          function func() public {
             assert(items[5] == 0);
           }
         }
         |]
-      let sig = (Sig "func(uint256)" [AbiUIntType 256])
+      let sig = (Sig "func()" [])
       (_, [Cex (_, ctr)]) <- withSolvers CVC5 1 Nothing $ \s -> checkAssert s defaultPanicCodes c (Just sig) [] defaultVeriOpts
       putStrLnM  $ "expected counterexample found.  ctr: " <> (show ctr)
   ]

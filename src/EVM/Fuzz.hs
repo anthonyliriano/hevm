@@ -19,7 +19,7 @@ import Data.ByteString qualified as BS
 import Data.Word (Word8)
 import Control.Monad.Random.Strict qualified as CMR
 
-import EVM.Types (Prop(..), W256, Expr(..), EType(..), internalError)
+import EVM.Types (Prop(..), W256, Expr(..), EType(..), internalError, keccak')
 import EVM.SMT (BufModel(..), SMTCex(..))
 import Debug.Trace
 
@@ -36,12 +36,10 @@ tryCexFuzz ps tries = CMR.evalRand (testVals tries) (CMR.mkStdGen 1337)
       varVals <- getVals vars
       bufVals <- getBufs bufs
       storeVals <- getStores stores
-      -- traceM $ "storeVals: " <> show storeVals
-      -- traceM $ "mapped: " <> (show $ map (substituteStores storeVals) ps)
       let
-        ret =  map (substituteEWord varVals . substituteBuf bufVals . substituteStores storeVals) ps
+        ret =  filterCorrectKeccak $ map (substituteEWord varVals . substituteBuf bufVals . substituteStores storeVals) ps
         retSimp =  Expr.simplifyProps ret
-      -- traceM $ "ret: " <> show ret
+      traceM $ "ret: " <> show ret <> " retsimp: " <> show retSimp
       if null retSimp then pure $ Just (SMTCex {
                                     vars = varVals
                                     , addrs = mempty
@@ -52,6 +50,12 @@ tryCexFuzz ps tries = CMR.evalRand (testVals tries) (CMR.mkStdGen 1337)
                                     })
                                     else testVals (todo-1)
 
+-- Filter out PEq (Lit X) (keccak (ConcreteBuf Y)) if it's correct
+filterCorrectKeccak :: [Prop] -> [Prop]
+filterCorrectKeccak ps = filter checkKecc ps
+  where
+    checkKecc (PEq (Lit x) (Keccak (ConcreteBuf y))) = keccak' y /= x
+    checkKecc _ = True
 
 substituteEWord :: Map (Expr EWord) W256 -> Prop -> Prop
 substituteEWord valMap p = mapProp go p
